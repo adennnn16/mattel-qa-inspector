@@ -2,5 +2,4 @@ streamlit
 opencv-python-headless
 scikit-image
 numpy
-av==10.0.0
 streamlit-webrtc
