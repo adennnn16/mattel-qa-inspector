@@ -2,14 +2,16 @@ import cv2
 import numpy as np
 from skimage.metrics import structural_similarity as ssim
 import streamlit as st
+from streamlit_webrtc import WebRtcMode, webrtc_streamer
+import av
 
-# Configuration
+# 1. Configuration
 st.set_page_config(
     page_title="Mattel Packaging Inspector", layout="centered", page_icon="💖"
 )
 
 # --- SECURITY CONFIGURATION: IP WHITELIST ---
-ALLOWED_IP = "10.12.141.25"
+ALLOWED_IP = "192.168.0.103"
 
 
 def get_remote_ip():
@@ -22,9 +24,7 @@ def get_remote_ip():
 
 def check_authentication():
     client_ip = get_remote_ip()
-
     if client_ip != ALLOWED_IP:
-        # Tampilan pemblokiran jika IP tidak sesuai
         st.markdown(
             f"""
             <div style="
@@ -51,13 +51,12 @@ def check_authentication():
     return True
 
 
-# Jalankan proteksi IP
 if check_authentication():
 
-    # Custom Styling & Anti-Screenshot Protocol Injection
-    CSS_THEME = """
+    # 2. Custom Styling & Advanced Anti-Screenshot Protocol (Blank Screen)
+    CSS_AND_JS_PROTECTION = """
         <style>
-        /* Mencegah seleksi teks dan klik kanan */
+        /* Mencegah seleksi teks & klik kanan */
         body, .stApp {
             -webkit-user-select: none;
             -moz-user-select: none;
@@ -67,13 +66,14 @@ if check_authentication():
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
         }
 
-        /* Class untuk menyembunyikan/membuat layar putih saat screenshot/blur */
-        .secure-blank {
-            filter: blur(50px) !important;
-            opacity: 0.01 !important;
+        /* Class untuk memutihkan seluruh tampilan saat terdeteksi SS atau Hilang Fokus */
+        .blank-screen {
+            background-color: #FFFFFF !important;
+            opacity: 0 !important;
+            filter: brightness(10) contrast(0) !important;
             transition: none !important;
         }
-        
+
         .mattel-header {
             background: linear-gradient(135deg, #FF1493 0%, #FF007F 100%);
             padding: 18px 24px;
@@ -85,7 +85,7 @@ if check_authentication():
             justify-content: space-between;
             align-items: center;
         }
-        
+
         .mattel-sub {
             font-size: 10px;
             font-weight: 700;
@@ -94,13 +94,13 @@ if check_authentication():
             color: #FFB6C1;
             margin: 0;
         }
-        
+
         .mattel-title {
             font-size: 20px;
             font-weight: 800;
             margin: 0;
         }
-        
+
         .barbie-badge {
             background-color: rgba(255, 255, 255, 0.2);
             padding: 4px 12px;
@@ -117,24 +117,6 @@ if check_authentication():
             max-width: 480px;
         }
 
-        div.stButton > button:first-child {
-            background: linear-gradient(90deg, #FF1493 0%, #E60067 100%);
-            color: #FFFFFF;
-            font-weight: 700;
-            font-size: 15px;
-            border-radius: 12px;
-            border: none;
-            padding: 12px 24px;
-            box-shadow: 0 4px 10px rgba(255, 20, 147, 0.3);
-            width: 100%;
-        }
-
-        [data-testid="stCameraInput"] {
-            border: 3px solid #FF1493;
-            border-radius: 16px;
-            overflow: hidden;
-        }
-
         .ui-heading {
             text-align: center;
             color: #D81B60;
@@ -142,55 +124,47 @@ if check_authentication():
             margin-top: 12px;
             margin-bottom: 4px;
         }
-        
-        .ui-subtext {
-            text-align: center;
-            color: #FF69B4;
-            font-size: 12px;
-            margin-bottom: 16px;
-        }
         </style>
 
         <script>
-        // Mencegah Klik Kanan
+        // Mencegah Menu Klik Kanan
         document.addEventListener('contextmenu', event => event.preventDefault());
 
-        // Detect Tombol PrintScreen & Kombinasi Shortcut Screenshot
-        document.addEventListener('keyup', function(e) {
-            if (e.key === 'PrintScreen') {
-                triggerBlank();
-            }
+        // Fungsi Memutihkan Layar
+        function makeBlank() {
+            document.body.classList.add('blank-screen');
+            setTimeout(() => {
+                document.body.classList.remove('blank-screen');
+            }, 1500);
+        }
+
+        // Detect Tombol PrintScreen & Shortcut SS HP/PC
+        document.addEventListener('keyup', (e) => {
+            if (e.key === 'PrintScreen') makeBlank();
         });
 
-        document.addEventListener('keydown', function(e) {
+        document.addEventListener('keydown', (e) => {
             if ((e.ctrlKey && e.key === 'p') || 
                 (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'S')) ||
-                (e.metaKey && e.shiftKey && (e.key === '3' || e.key === '4'))) {
-                triggerBlank();
+                (e.metaKey && e.shiftKey && (e.key === '3' || e.key === '4' || e.key === '5'))) {
+                makeBlank();
             }
         });
 
-        // Deteksi Kehilangan Fokus (Biasanya terjadi saat memicu screenshot di HP/OS)
-        window.addEventListener('blur', function() {
-            document.body.classList.add('secure-blank');
+        // Ketika HP/Browser memicu screenshot, sistem OS akan mengambil fokus layar.
+        // Event blur ini akan mengubah tampilan menjadi putih total tepat sebelum foto SS ditangkap OS.
+        window.addEventListener('blur', () => {
+            document.body.classList.add('blank-screen');
         });
 
-        window.addEventListener('focus', function() {
-            document.body.classList.remove('secure-blank');
+        window.addEventListener('focus', () => {
+            document.body.classList.remove('blank-screen');
         });
-
-        function triggerBlank() {
-            document.body.classList.add('secure-blank');
-            setTimeout(function() {
-                document.body.classList.remove('secure-blank');
-            }, 2000);
-        }
         </script>
     """
+    st.markdown(CSS_AND_JS_PROTECTION, unsafe_allow_html=True)
 
-    st.markdown(CSS_THEME, unsafe_allow_html=True)
-
-    # Application Header
+    # 3. Header
     HEADER_HTML = """
         <div class="mattel-header">
             <div>
@@ -202,55 +176,47 @@ if check_authentication():
     """
     st.markdown(HEADER_HTML, unsafe_allow_html=True)
 
-    # Inspection Parameters
+    # 4. Parameters Sidebar
     st.sidebar.header("Parameters")
     thresh_val = st.sidebar.slider("Sensitivity Threshold", 30, 200, 80, 5)
     min_area_val = st.sidebar.slider(
         "Min Defect Size (px)", 500, 10000, 4000, 500
     )
 
-    def process_image(img_bytes, target_size=(640, 480)):
-        """Convert uploaded bytes to grayscale blurred image matrix."""
-        nparr = np.frombuffer(img_bytes, np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        resized = cv2.resize(img, target_size)
-        gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
-        blurred = cv2.GaussianBlur(gray, (11, 11), 0)
-        return resized, blurred
-
-    # Step 1: Reference Setup
+    # 5. Reference Image Setup
     st.markdown(
-        "<p class='ui-heading'>1. Reference Image</p>", unsafe_allow_html=True
+        "<p class='ui-heading'>1. Reference Master Sample</p>",
+        unsafe_allow_html=True,
     )
     uploaded_file = st.file_uploader(
-        "Upload Golden Sample", type=["jpg", "png", "jpeg"]
+        "Upload Reference Image", type=["jpg", "png", "jpeg"]
     )
 
+    ref_gray = None
     if uploaded_file is not None:
-        ref_img, ref_gray = process_image(uploaded_file.read())
+        file_bytes = np.frombuffer(uploaded_file.read(), np.uint8)
+        ref_img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+        ref_img = cv2.resize(ref_img, (640, 480))
+        gray = cv2.cvtColor(ref_img, cv2.COLOR_BGR2GRAY)
+        ref_gray = cv2.GaussianBlur(gray, (11, 11), 0)
         st.image(
             ref_img,
             channels="BGR",
-            caption="Master Reference",
+            caption="Master Reference Active",
             use_container_width=True,
         )
 
-        # Step 2: Live Scanning
-        st.markdown(
-            "<p class='ui-heading'>Position packaging in frame</p>",
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            "<p class='ui-subtext'>Tap button below to capture</p>",
-            unsafe_allow_html=True,
-        )
+    # 6. Real-Time Processing Callback Function
+    def video_frame_callback(frame: av.VideoFrame) -> av.VideoFrame:
+        img = frame.to_ndarray(format="bgr24")
+        resized = cv2.resize(img, (640, 480))
 
-        camera_image = st.camera_input("Scan Packaging")
+        # Jika reference image sudah diunggah, lakukan analisis real-time
+        if ref_gray is not None:
+            gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+            live_gray = cv2.GaussianBlur(gray, (11, 11), 0)
 
-        if camera_image is not None:
-            live_frame, live_gray = process_image(camera_image.read())
-
-            # Structural Similarity Comparison
+            # Hitung Structural Similarity (SSIM)
             score, diff = ssim(ref_gray, live_gray, full=True)
             diff_scaled = (diff * 255).astype("uint8")
 
@@ -261,65 +227,57 @@ if check_authentication():
                 thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
             )
 
-            annotated_frame = live_frame.copy()
             has_defect = False
-
             for cnt in contours:
                 if cv2.contourArea(cnt) > min_area_val:
                     has_defect = True
                     x, y, w, h = cv2.boundingRect(cnt)
-                    cv2.rectangle(
-                        annotated_frame, (x, y), (x + w, y + h), (0, 0, 255), 2
-                    )
+                    # Bounding Box Merah untuk Defect
+                    cv2.rectangle(resized, (x, y), (x + w, y + h), (0, 0, 255), 3)
                     cv2.putText(
-                        annotated_frame,
+                        resized,
                         "DEFECT",
-                        (x, y - 8),
+                        (x, y - 10),
                         cv2.FONT_HERSHEY_SIMPLEX,
-                        0.5,
+                        0.7,
                         (0, 0, 255),
                         2,
                     )
 
-            # Step 3: Analysis Display
-            st.markdown(
-                "<hr style='border: 0.5px solid #FFB6C1;'>",
-                unsafe_allow_html=True,
+            # Overlay Status pada Frame Video
+            status_text = (
+                f"REJECT (Match: {round(score*100,1)}%)"
+                if has_defect
+                else f"PASS (Match: {round(score*100,1)}%)"
+            )
+            color = (0, 0, 255) if has_defect else (0, 255, 0)
+
+            cv2.rectangle(resized, (10, 10), (320, 50), (0, 0, 0), -1)
+            cv2.putText(
+                resized,
+                status_text,
+                (20, 38),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                color,
+                2,
             )
 
-            match_score = round(score * 100, 2)
-            col1, col2 = st.columns(2)
-            col1.metric("Similarity", f"{match_score}%")
+        return av.VideoFrame.from_ndarray(resized, format="bgr24")
 
-            if has_defect:
-                col2.metric(
-                    "Status",
-                    "REJECT",
-                    delta="- Defect Found",
-                    delta_color="inverse",
-                )
-                st.error(
-                    "Inspection Failed: Variance detected in packaging layout."
-                )
-            else:
-                col2.metric("Status", "PASS", delta="Match")
-                st.success(
-                    "Inspection Passed: Packaging matches reference sample."
-                )
+    # 7. Real-Time Camera Stream Section
+    st.markdown(
+        "<p class='ui-heading'>2. Real-Time Conveyor Scanner</p>",
+        unsafe_allow_html=True,
+    )
 
-            st.image(
-                annotated_frame,
-                channels="BGR",
-                caption="Inspection Overlay",
-                use_container_width=True,
-            )
-
-            with st.expander("Show Difference Mask"):
-                st.image(
-                    thresh,
-                    caption="Binary Difference Map",
-                    use_container_width=True,
-                )
-
+    if ref_gray is not None:
+        webrtc_streamer(
+            key="conveyor-inspector",
+            mode=WebRtcMode.SENDRECV,
+            video_frame_callback=video_frame_callback,
+            media_stream_constraints={"video": True, "audio": False},
+            async_processing=True,
+        )
     else:
-        st.info("Upload a reference sample to begin inspection workflow.")
+        st.info("Upload sampel referensi di atas untuk mengaktifkan pemindaian otomatis.")
