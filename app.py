@@ -11,7 +11,7 @@ st.set_page_config(
 )
 
 # --- SECURITY CONFIGURATION: IP WHITELIST ---
-ALLOWED_IP = "192.168.0.103"
+ALLOWED_IP = "10.12.16.12"
 
 
 def get_remote_ip():
