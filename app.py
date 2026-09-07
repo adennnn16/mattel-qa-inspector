@@ -9,7 +9,7 @@ st.set_page_config(
 )
 
 # --- SECURITY CONFIGURATION: IP WHITELIST ---
-ALLOWED_IP = "10.12.141.25"
+ALLOWED_IP = "192.168.0.103"
 
 
 def get_remote_ip():
@@ -54,12 +54,24 @@ def check_authentication():
 # Jalankan proteksi IP
 if check_authentication():
 
-    # Custom Styling
+    # Custom Styling & Anti-Screenshot Protocol Injection
     CSS_THEME = """
         <style>
-        .stApp {
+        /* Mencegah seleksi teks dan klik kanan */
+        body, .stApp {
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
             background-color: #FFF0F5;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        /* Class untuk menyembunyikan/membuat layar putih saat screenshot/blur */
+        .secure-blank {
+            filter: blur(50px) !important;
+            opacity: 0.01 !important;
+            transition: none !important;
         }
         
         .mattel-header {
@@ -138,6 +150,42 @@ if check_authentication():
             margin-bottom: 16px;
         }
         </style>
+
+        <script>
+        // Mencegah Klik Kanan
+        document.addEventListener('contextmenu', event => event.preventDefault());
+
+        // Detect Tombol PrintScreen & Kombinasi Shortcut Screenshot
+        document.addEventListener('keyup', function(e) {
+            if (e.key === 'PrintScreen') {
+                triggerBlank();
+            }
+        });
+
+        document.addEventListener('keydown', function(e) {
+            if ((e.ctrlKey && e.key === 'p') || 
+                (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'S')) ||
+                (e.metaKey && e.shiftKey && (e.key === '3' || e.key === '4'))) {
+                triggerBlank();
+            }
+        });
+
+        // Deteksi Kehilangan Fokus (Biasanya terjadi saat memicu screenshot di HP/OS)
+        window.addEventListener('blur', function() {
+            document.body.classList.add('secure-blank');
+        });
+
+        window.addEventListener('focus', function() {
+            document.body.classList.remove('secure-blank');
+        });
+
+        function triggerBlank() {
+            document.body.classList.add('secure-blank');
+            setTimeout(function() {
+                document.body.classList.remove('secure-blank');
+            }, 2000);
+        }
+        </script>
     """
 
     st.markdown(CSS_THEME, unsafe_allow_html=True)
