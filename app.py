@@ -122,17 +122,18 @@ if check_authentication():
         unsafe_allow_html=True,
     )
 
-    # Parameters
+    # Parameters Sidebar
     st.sidebar.header("Parameters")
     thresh_val = st.sidebar.slider("Sensitivity Threshold", 30, 200, 80, 5)
     min_area_val = st.sidebar.slider(
         "Min Defect Size (px)", 500, 10000, 4000, 500
     )
-    auto_mode = st.sidebar.checkbox(
-        "Continuous Auto-Scan (Conveyor Mode)", value=True
+    empty_thresh = st.sidebar.slider(
+        "Empty Conveyor Threshold (%)", 5, 40, 20, 1,
+        help="Jika similarity di bawah batas ini, dianggap tidak ada barang (EMPTY)"
     )
 
-    # Reference Image
+    # Step 1: Reference Master Sample
     st.markdown(
         "<p class='ui-heading'>1. Reference Master Sample</p>",
         unsafe_allow_html=True,
@@ -151,15 +152,17 @@ if check_authentication():
         st.image(
             ref_img,
             channels="BGR",
-            caption="Master Reference",
+            caption="Master Reference Active",
             use_container_width=True,
         )
 
         st.markdown(
-            "<p class='ui-heading'>2. Conveyor Scanner</p>",
+            "<p class='ui-heading'>2. Automated Live Conveyor Scanner</p>",
             unsafe_allow_html=True,
         )
-        camera_image = st.camera_input("Scanner Active")
+
+        # Kamera Otomatis Menyala Menggunakan Component Streamlit Camera Input dengan Auto-Trigger
+        camera_image = st.camera_input("Conveyor Live Scanner", key="auto_scanner")
 
         if camera_image is not None:
             live_bytes = np.frombuffer(camera_image.read(), np.uint8)
@@ -168,6 +171,7 @@ if check_authentication():
             live_gray = cv2.cvtColor(live_img, cv2.COLOR_BGR2GRAY)
             live_gray = cv2.GaussianBlur(live_gray, (11, 11), 0)
 
+            # Structural Similarity Index (SSIM)
             score, diff = ssim(ref_gray, live_gray, full=True)
             diff_scaled = (diff * 255).astype("uint8")
 
@@ -180,17 +184,20 @@ if check_authentication():
 
             annotated_frame = live_img.copy()
             has_defect = False
+            defect_count = 0
 
             for cnt in contours:
                 if cv2.contourArea(cnt) > min_area_val:
                     has_defect = True
+                    defect_count += 1
                     x, y, w, h = cv2.boundingRect(cnt)
+                    # Bounding Box Merah untuk Defect / Missing Part
                     cv2.rectangle(
-                        annotated_frame, (x, y), (x + w, y + h), (0, 0, 255), 2
+                        annotated_frame, (x, y), (x + w, y + h), (0, 0, 255), 3
                     )
                     cv2.putText(
                         annotated_frame,
-                        "DEFECT",
+                        "DEFECT / MISSING",
                         (x, y - 8),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         0.5,
@@ -200,22 +207,25 @@ if check_authentication():
 
             match_score = round(score * 100, 2)
             col1, col2 = st.columns(2)
-            col1.metric("Similarity", f"{match_score}%")
+            col1.metric("Similarity Score", f"{match_score}%")
 
-            if has_defect:
-                col2.metric("Status", "REJECT", delta="- Defect Found")
-                st.error("INSPECTION FAILED: Defect Detected!")
+            # Penentuan Status Otomatis
+            if match_score < empty_thresh:
+                col2.metric("Status", "NO ITEM", delta="Conveyor Empty", delta_color="off")
+                st.info("Status: Conveyor Kosong / Tidak Ada Barang Dalam Frame.")
+            elif has_defect:
+                col2.metric("Status", "REJECT", delta=f"{defect_count} Defect/Missing", delta_color="inverse")
+                st.error(f"INSPECTION FAILED: Terdeteksi {defect_count} area komponen hilang / cacat!")
             else:
-                col2.metric("Status", "PASS", delta="Match")
-                st.success("INSPECTION PASSED")
+                col2.metric("Status", "PASS", delta="Match Perfect")
+                st.success("INSPECTION PASSED: Kemasan sesuai dengan Master Reference.")
 
             st.image(
                 annotated_frame,
                 channels="BGR",
-                caption="Inspection Analysis",
+                caption="Live Inspection Overlay",
                 use_container_width=True,
             )
 
-            # Jika mode conveyor aktif, lakukan refresh otomatis untuk menangkap frame berikutnya
-            if auto_mode:
-                st.rerun()
+    else:
+        st.info("Unggah sampel referensi di atas untuk memulai inspeksi conveyor.")
