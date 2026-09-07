@@ -9,7 +9,7 @@ import streamlit as st
 
 # --- SECURITY CONFIGURATION: IP WHITELIST ONLY ---
 ALLOWED_IPS = [
-    "10.12.141.25",  # Satu-satunya IP yang diizinkan
+    "10.12.142.25",  # Satu-satunya IP yang diizinkan
 ]
 
 
