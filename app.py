@@ -17,7 +17,6 @@ ALLOWED_IPS = [
 def get_remote_ip():
     """Mendapatkan IP Address pengunjung dari HTTP Header Streamlit."""
     headers = st.context.headers
-    # Memeriksa header jika aplikasi berjalan di balik proxy/firewall
     if "X-Forwarded-For" in headers:
         return headers["X-Forwarded-For"].split(",")[0].strip()
     return headers.get("Remote-Addr", "111.94.235.200")
@@ -31,7 +30,6 @@ if "authenticated" not in st.session_state:
 # Custom Styling & Security Protocol Injection
 CSS_THEME = """
     <style>
-    /* Security: Block text selection & right click context menu */
     body {
         -webkit-user-select: none;
         -moz-user-select: none;
@@ -120,7 +118,6 @@ CSS_THEME = """
         margin-bottom: 16px;
     }
 
-    /* Dynamic Watermark Styling */
     .watermark {
         position: fixed;
         bottom: 10px;
@@ -134,7 +131,6 @@ CSS_THEME = """
         text-align: right;
     }
 
-    /* Access Card UI */
     .login-card {
         background-color: #FFFFFF;
         padding: 30px;
@@ -147,7 +143,6 @@ CSS_THEME = """
     }
     </style>
 
-    <!-- Security Script: Auto-blur on Tab Switch / Screen Snapping -->
     <script>
     window.addEventListener('blur', function() {
         document.body.style.filter = 'blur(15px)';
@@ -184,40 +179,37 @@ CREATE TABLE IF NOT EXISTS inspection (
     aligned       INTEGER NOT NULL DEFAULT 0,
     threshold     INTEGER NOT NULL DEFAULT 0,
     min_area      INTEGER NOT NULL DEFAULT 0,
-    capture       TEXT    NOT NULL DEFAULT ''
+    capture       TEXT    NOT NULL DEFAULT '',
+    regions       TEXT    NOT NULL DEFAULT ''
 )
 """
 
 REFERENCE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS reference (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
-    sku       TEXT NOT NULL DEFAULT '',
     digest    TEXT NOT NULL DEFAULT '',
     path      TEXT NOT NULL DEFAULT '',
     added_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE (sku, digest)
+    UNIQUE (digest)
 )
 """
 
 ZONE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS zone (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    reference  TEXT    NOT NULL DEFAULT '',
     name       TEXT    NOT NULL DEFAULT '',
     x          INTEGER NOT NULL DEFAULT 0,
     y          INTEGER NOT NULL DEFAULT 0,
     w          INTEGER NOT NULL DEFAULT 0,
     h          INTEGER NOT NULL DEFAULT 0,
-    UNIQUE (reference, name)
+    UNIQUE (name)
 )
 """
 
 
 def check_authentication():
-    """Restricted screen: Only IP Whitelist validation."""
     client_ip = get_remote_ip()
 
-    # Pengecekan IP Whitelist
     if client_ip not in ALLOWED_IPS:
         st.session_state["authenticated"] = False
         st.markdown(CSS_THEME, unsafe_allow_html=True)
@@ -237,66 +229,40 @@ def check_authentication():
         st.markdown("</div>", unsafe_allow_html=True)
         return False
 
-    # Jika IP valid, izinkan akses langsung
     st.session_state["authenticated"] = True
     return True
 
 
 def connect():
-    """Open the database, creating and migrating it as needed."""
     db = sqlite3.connect(DB_PATH)
     with db:
         db.execute(SCHEMA)
         db.execute(ZONE_SCHEMA)
         db.execute(REFERENCE_SCHEMA)
-        widen_reference_table(db)
-        existing = {
-            row[1] for row in db.execute("PRAGMA table_info(inspection)")
-        }
-        for column, spec in (
-            ("regions", "TEXT NOT NULL DEFAULT ''"),
-            ("sku", "TEXT NOT NULL DEFAULT ''"),
-        ):
-            if column not in existing:
-                db.execute(f"ALTER TABLE inspection ADD COLUMN {column} {spec}")
     return db
 
 
-def widen_reference_table(db):
-    columns = {row[1] for row in db.execute("PRAGMA table_info(reference)")}
-    if "id" in columns:
-        return
-    db.execute("ALTER TABLE reference RENAME TO reference_single")
-    db.execute(REFERENCE_SCHEMA)
-    db.execute(
-        "INSERT INTO reference (sku, digest, path, added_at)"
-        " SELECT sku, digest, path, added_at FROM reference_single"
-    )
-    db.execute("DROP TABLE reference_single")
-
-
-def save_reference(sku, data, suffix):
+def save_reference(data, suffix):
     REFERENCE_DIR.mkdir(exist_ok=True)
     digest = hashlib.sha256(data).hexdigest()
-    path = REFERENCE_DIR / f"{sku}-{digest[:12]}{suffix}"
+    path = REFERENCE_DIR / f"ref-{digest[:12]}{suffix}"
     path.write_bytes(data)
 
     db = connect()
     with db:
         db.execute(
-            "INSERT INTO reference (sku, digest, path) VALUES (?, ?, ?)"
-            " ON CONFLICT (sku, digest) DO UPDATE SET path=excluded.path",
-            (sku, digest, str(path)),
+            "INSERT INTO reference (digest, path) VALUES (?, ?)"
+            " ON CONFLICT (digest) DO UPDATE SET path=excluded.path",
+            (digest, str(path)),
         )
     db.close()
 
 
-def references_for(sku):
+def get_references():
     db = connect()
     db.row_factory = sqlite3.Row
     rows = db.execute(
-        "SELECT id, sku, digest, path FROM reference WHERE sku = ? ORDER BY id",
-        (sku,),
+        "SELECT id, digest, path FROM reference ORDER BY id"
     ).fetchall()
     db.close()
     return [dict(row) for row in rows]
@@ -309,33 +275,23 @@ def delete_reference(reference_id):
     db.close()
 
 
-def known_skus():
-    db = connect()
-    rows = db.execute(
-        "SELECT DISTINCT sku FROM reference ORDER BY sku"
-    ).fetchall()
-    db.close()
-    return [row[0] for row in rows]
-
-
-def save_zone(reference, name, x, y, w, h):
+def save_zone(name, x, y, w, h):
     db = connect()
     with db:
         db.execute(
-            "INSERT INTO zone (reference, name, x, y, w, h) VALUES (?, ?, ?, ?, ?, ?)"
-            " ON CONFLICT (reference, name) DO UPDATE SET x=excluded.x, y=excluded.y,"
+            "INSERT INTO zone (name, x, y, w, h) VALUES (?, ?, ?, ?, ?)"
+            " ON CONFLICT (name) DO UPDATE SET x=excluded.x, y=excluded.y,"
             " w=excluded.w, h=excluded.h",
-            (reference, name, x, y, w, h),
+            (name, x, y, w, h),
         )
     db.close()
 
 
-def zones_for(reference):
+def get_zones():
     db = connect()
     db.row_factory = sqlite3.Row
     rows = db.execute(
-        "SELECT id, name, x, y, w, h FROM zone WHERE reference = ? ORDER BY name",
-        (reference,),
+        "SELECT id, name, x, y, w, h FROM zone ORDER BY name"
     ).fetchall()
     db.close()
     return [dict(row) for row in rows]
@@ -393,7 +349,6 @@ def log_inspection(
     threshold,
     min_area,
     regions="",
-    sku="",
 ):
     CAPTURES_DIR = CAPTURE_DIR
     CAPTURES_DIR.mkdir(exist_ok=True)
@@ -404,10 +359,9 @@ def log_inspection(
     with db:
         db.execute(
             "INSERT INTO inspection"
-            " (sku, verdict, similarity, defects, aligned, threshold, min_area, capture, regions)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " (verdict, similarity, defects, aligned, threshold, min_area, capture, regions)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                sku,
                 verdict,
                 similarity,
                 defects,
@@ -425,7 +379,7 @@ def recent_inspections(limit=10):
     db = connect()
     db.row_factory = sqlite3.Row
     rows = db.execute(
-        "SELECT inspected_at, sku, verdict, similarity, defects, regions, aligned, capture"
+        "SELECT inspected_at, verdict, similarity, defects, regions, aligned, capture"
         " FROM inspection ORDER BY id DESC LIMIT ?",
         (limit,),
     ).fetchall()
@@ -460,9 +414,7 @@ def process_image(img_bytes, target_size=(640, 480)):
     nparr = np.frombuffer(img_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if img is None:
-        st.error(
-            "That file could not be decoded as an image. Re-save it as JPEG or PNG."
-        )
+        st.error("Gagal membaca file gambar. Unggah format JPEG atau PNG.")
         st.stop()
     resized = letterbox(img, target_size)
     gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
@@ -517,15 +469,12 @@ def main():
         page_icon="💖",
     )
 
-    # Execute IP Check Authentication Gatekeeper First
     if not check_authentication():
         return
 
-    # Security & UI Layout Injection
     st.markdown(CSS_THEME, unsafe_allow_html=True)
     st.markdown(HEADER_HTML, unsafe_allow_html=True)
 
-    # Dynamic Watermark Injection
     st.markdown(
         f"""
         <div class="watermark">
@@ -537,7 +486,6 @@ def main():
         unsafe_allow_html=True,
     )
 
-    # Sidebar Parameters & IP Status
     st.sidebar.markdown("### Access Status")
     st.sidebar.success("Network Authorized")
     st.sidebar.write(f"IP: `{get_remote_ip()}`")
@@ -549,29 +497,12 @@ def main():
         "Min Defect Size (px)", 100, 5000, 800, 100
     )
 
-    # Step 1: Product and its golden sample
-    st.markdown("<p class='ui-heading'>1. Product</p>", unsafe_allow_html=True)
+    # Section 1: Golden Sample Management
+    st.markdown("<p class='ui-heading'>1. Golden Sample</p>", unsafe_allow_html=True)
 
-    NEW_SKU = "\u2014 new SKU \u2014"
-    catalogue = known_skus()
-    choice = st.selectbox("SKU", catalogue + [NEW_SKU])
-
-    # Mengatur SKU otomatis apabila memilih new SKU
-    if choice == NEW_SKU:
-        if "auto_sku" not in st.session_state:
-            st.session_state["auto_sku"] = (
-                f"SKU-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
-            )
-        sku = st.session_state["auto_sku"]
-        st.info(f"Generated SKU Code: **{sku}**")
-    else:
-        sku = choice
-        if "auto_sku" in st.session_state:
-            del st.session_state["auto_sku"]
-
-    samples = references_for(sku) if sku else []
+    samples = get_references()
     uploaded_file = st.file_uploader(
-        "Golden sample" if not samples else "Add another golden sample",
+        "Unggah Golden Sample Utama" if not samples else "Tambah variasi Golden Sample",
         type=["jpg", "png", "jpeg"],
     )
 
@@ -580,18 +511,14 @@ def main():
         if hashlib.sha256(data).hexdigest() not in {
             s["digest"] for s in samples
         }:
-            save_reference(sku, data, Path(uploaded_file.name).suffix or ".jpg")
-            samples = references_for(sku)
-            # Reset auto_sku untuk penambahan produk baru selanjutnya
-            if "auto_sku" in st.session_state:
-                del st.session_state["auto_sku"]
+            save_reference(data, Path(uploaded_file.name).suffix or ".jpg")
+            samples = get_references()
             st.rerun()
 
     missing = [s for s in samples if not Path(s["path"]).exists()]
     if missing:
         st.error(
-            f"{len(missing)} golden sample(s) recorded for {sku} are missing from disk. "
-            "Upload them again, or remove them below."
+            f"{len(missing)} golden sample tidak ditemukan di direktori."
         )
     samples = [s for s in samples if Path(s["path"]).exists()]
 
@@ -622,71 +549,62 @@ def main():
 
         if unregistered:
             st.warning(
-                "Left out of the comparison, being too unlike the first sample to register: "
+                "Sampel berikut tidak dapat diposisikan presisi dengan acuan: "
                 + ", ".join(unregistered)
             )
 
-        zones = zones_for(sku)
+        zones = get_zones()
 
         st.image(
             draw_zones(ref_img, zones),
             channels="BGR",
-            caption=f"Master Reference \u2014 {sku} ({len(sample_grays)} of "
-            f"{len(samples)} samples in the comparison)",
+            caption=f"Master Reference Image ({len(sample_grays)} dari {len(samples)} sampel aktif)",
             width="stretch",
         )
 
-        with st.expander(f"Golden samples ({len(samples)} held)"):
-            st.caption(
-                "The first is the anchor every capture is registered onto. Each extra sample "
-                "widens the tolerance: a pixel only counts as differing when it differs from "
-                "all of them."
-            )
+        with st.expander(f"Kelola Sampel ({len(samples)} sampel tersimpan)"):
             for position, sample in enumerate(samples):
                 row, remove = st.columns([4, 1])
                 row.text(
-                    ("anchor  " if position == 0 else "        ")
+                    ("Utama: " if position == 0 else "Variasi: ")
                     + Path(sample["path"]).name
                 )
-                if remove.button("Remove", key=f"remove-sample-{sample['id']}"):
+                if remove.button("Hapus", key=f"remove-sample-{sample['id']}"):
                     delete_reference(sample["id"])
                     st.rerun()
 
-        with st.expander(f"Inspection regions ({len(zones)} named)"):
-            st.caption(
-                "Name the area each component occupies on the golden sample. A capture is "
-                "registered onto this frame first, so a region keeps its meaning across units."
-            )
-            name = st.text_input("Region name", placeholder="shoe_left")
+        with st.expander(f"Kelola Region Inspeksi ({len(zones)} area)"):
+            st.caption("Beri nama dan tentukan koordinat area inspeksi pada produk.")
+            name = st.text_input("Nama Region", placeholder="logo_brand")
             left, top, width, height = st.columns(4)
             zone_x = left.number_input("x", 0, 639, 0, 5)
             zone_y = top.number_input("y", 0, 479, 0, 5)
             zone_w = width.number_input("width", 1, 640, 120, 5)
             zone_h = height.number_input("height", 1, 480, 120, 5)
 
-            if st.button("Save region"):
+            if st.button("Simpan Region"):
                 if name.strip():
-                    save_zone(sku, name.strip(), zone_x, zone_y, zone_w, zone_h)
+                    save_zone(name.strip(), zone_x, zone_y, zone_w, zone_h)
                     st.rerun()
                 else:
-                    st.warning("A region needs a name.")
+                    st.warning("Nama region wajib diisi.")
 
             for zone in zones:
                 row, remove = st.columns([4, 1])
                 row.text(
                     f"{zone['name']}  ({zone['x']}, {zone['y']})  {zone['w']}x{zone['h']}"
                 )
-                if remove.button("Remove", key=f"remove-{zone['id']}"):
+                if remove.button("Hapus", key=f"remove-{zone['id']}"):
                     delete_zone(zone["id"])
                     st.rerun()
 
-        # Step 2: Live Scanning
+        # Section 2: Testing / Camera Scan
         st.markdown(
-            "<p class='ui-heading'>Position packaging in frame</p>",
+            "<p class='ui-heading'>2. Testing / Inspeksi Kamera</p>",
             unsafe_allow_html=True,
         )
         st.markdown(
-            "<p class='ui-subtext'>Tap button below to capture</p>",
+            "<p class='ui-subtext'>Posisikan kemasan dan tekan tombol di bawah</p>",
             unsafe_allow_html=True,
         )
 
@@ -702,8 +620,8 @@ def main():
             if warped is None:
                 covered = None
                 st.warning(
-                    "Could not align this capture to the reference, so it is being compared as shot. "
-                    "Re-take it with the product framed as the golden sample was."
+                    "Peringatan: Gagal menyelaraskan posisi gambar otomatis. "
+                    "Pastikan posisi produk sejajar dengan Golden Sample."
                 )
             else:
                 live_frame = warped
@@ -747,7 +665,6 @@ def main():
                         2,
                     )
 
-            # Step 3: Analysis Display
             st.markdown(
                 "<hr style='border: 0.5px solid #FFB6C1;'>",
                 unsafe_allow_html=True,
@@ -768,21 +685,21 @@ def main():
                 )
                 if flagged:
                     st.error(
-                        "Inspection Failed. Check these regions: "
+                        "Inspeksi Gagal. Area cacat ditemukan di: "
                         + ", ".join(flagged)
                     )
                 else:
                     st.error(
-                        "Inspection Failed: Variance detected in packaging layout."
+                        "Inspeksi Gagal: Terdeteksi perbedaan struktur/cetakan."
                     )
             else:
                 col2.metric("Status", "PASS", delta="Match")
-                st.success("Inspection Passed: Packaging matches reference sample.")
+                st.success("Inspeksi Berhasil: Sesuai dengan Golden Sample.")
 
             st.image(
                 annotated_frame,
                 channels="BGR",
-                caption="Inspection Overlay",
+                caption="Hasil Overlay Inspeksi",
                 width="stretch",
             )
 
@@ -799,25 +716,24 @@ def main():
                     thresh_val,
                     min_area_val,
                     ", ".join(flagged),
-                    sku,
                 )
                 st.session_state["logged_capture"] = digest
 
-            with st.expander("Show Difference Mask"):
+            with st.expander("Tampilkan Peta Perbedaan (Difference Mask)"):
                 st.image(
                     thresh, caption="Binary Difference Map", width="stretch"
                 )
 
-            with st.expander("Recent Inspections"):
+            with st.expander("Riwayat Hasil Inspeksi"):
                 rows = recent_inspections()
                 if rows:
                     st.dataframe(rows, width="stretch", hide_index=True)
                 else:
-                    st.caption("Nothing recorded yet.")
+                    st.caption("Belum ada riwayat inspeksi.")
 
     else:
         st.info(
-            "Upload a golden sample to begin the inspection workflow."
+            "Silakan unggah foto Golden Sample terlebih dahulu untuk memulai."
         )
 
 
