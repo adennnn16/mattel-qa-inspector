@@ -1,3 +1,4 @@
+import datetime
 import hashlib
 import sqlite3
 from pathlib import Path
@@ -9,7 +10,7 @@ import streamlit as st
 
 # --- SECURITY CONFIGURATION: IP WHITELIST ONLY ---
 ALLOWED_IPS = [
-    "10.12.141.25",  # Satu-satunya IP yang diizinkan
+    "10.12.142.15",  # Satu-satunya IP yang diizinkan
 ]
 
 
@@ -554,11 +555,19 @@ def main():
     NEW_SKU = "\u2014 new SKU \u2014"
     catalogue = known_skus()
     choice = st.selectbox("SKU", catalogue + [NEW_SKU])
-    sku = (
-        st.text_input("New SKU code", placeholder="GTX99-beach").strip()
-        if choice == NEW_SKU
-        else choice
-    )
+
+    # Mengatur SKU otomatis apabila memilih new SKU
+    if choice == NEW_SKU:
+        if "auto_sku" not in st.session_state:
+            st.session_state["auto_sku"] = (
+                f"SKU-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
+            )
+        sku = st.session_state["auto_sku"]
+        st.info(f"Generated SKU Code: **{sku}**")
+    else:
+        sku = choice
+        if "auto_sku" in st.session_state:
+            del st.session_state["auto_sku"]
 
     samples = references_for(sku) if sku else []
     uploaded_file = st.file_uploader(
@@ -566,15 +575,17 @@ def main():
         type=["jpg", "png", "jpeg"],
     )
 
-    if uploaded_file is not None and not sku:
-        st.warning("Give the SKU a code before uploading its golden sample.")
-    elif uploaded_file is not None:
+    if uploaded_file is not None:
         data = uploaded_file.getvalue()
         if hashlib.sha256(data).hexdigest() not in {
             s["digest"] for s in samples
         }:
             save_reference(sku, data, Path(uploaded_file.name).suffix or ".jpg")
             samples = references_for(sku)
+            # Reset auto_sku untuk penambahan produk baru selanjutnya
+            if "auto_sku" in st.session_state:
+                del st.session_state["auto_sku"]
+            st.rerun()
 
     missing = [s for s in samples if not Path(s["path"]).exists()]
     if missing:
@@ -806,7 +817,7 @@ def main():
 
     else:
         st.info(
-            "Pick a SKU and give it a golden sample to begin the inspection workflow."
+            "Upload a golden sample to begin the inspection workflow."
         )
 
 
